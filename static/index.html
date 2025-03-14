@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat con IA</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #343541;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            height: 70vh;
+        }
+
+        #chat-container {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        #chat-box {
+            flex-grow: 1;
+            height: 500px;
+            background: #444654;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message {
+            max-width: 75%;
+            padding: 12px;
+            margin: 5px 0;
+            border-radius: 10px;
+            word-wrap: break-word;
+            display: inline-block;
+            line-height: 1.5;
+        }
+
+        .user {
+            align-self: flex-end;
+            background: #0b93f6;
+            color: white;
+            border-radius: 10px 10px 0 10px;
+        }
+
+        .bot {
+            align-self: flex-start;
+            background: #6b6f81;
+            color: white;
+            border-radius: 10px 10px 10px 0;
+            white-space: pre-wrap;
+        }
+
+        #input-container {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            max-width: 800px;
+            margin-top: 10px;
+        }
+
+        input {
+            flex-grow: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            background: #40414F;
+            color: white;
+            outline: none;
+        }
+
+        button {
+            background: #0b93f6;
+            border: none;
+            color: white;
+            padding: 12px 15px;
+            margin-left: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #6b6f81;
+            cursor: not-allowed;
+        }
+
+        button:hover:not(:disabled) {
+            background: #0078d4;
+        }
+
+        #new-session {
+            color: #343541;
+            margin-left: 0px;
+            width: 30%;
+            margin-top: 10px;
+            background: #bab6b6;
+        }
+
+        #new-session:hover {
+            color: #343541;
+            background: #fafafa;
+        }
+
+        .typing {
+            font-style: italic;
+            color: #b0b0b0;
+        }
+        .typing {
+            font-size: 16px;
+            
+            display: inline-block;
+            text-align: left;
+            white-space: pre; /* Mantiene el espaciado del texto sin colapsarlo */
+        }
+
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <button id="new-session" onclick="startNewSession()">Nueva Conversación</button>
+        <div id="chat-box"></div>
+        <div id="input-container">
+            <input type="text" id="user-input" placeholder="Escribe un mensaje..." autocomplete="off">
+            <button id="send-btn" onclick="sendMessage()">➤</button>
+        </div>
+    </div>
+
+    <script>
+        let sessionId = localStorage.getItem('sessionId') || null;
+        let isResponding = false;
+
+        async function loadHistory() {
+            if (!sessionId) return;
+            const res = await fetch(`/history?session_id=${sessionId}`);
+            const data = await res.json();
+            if (data.history.length > 0) {
+                for (const msg of data.history) {
+                    appendMessage(msg.message, msg.role);
+                }
+            }
+        }
+
+        function appendMessage(message, sender) {
+            const chatBox = document.getElementById('chat-box');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${sender}`;
+            msgDiv.textContent = message;
+            chatBox.appendChild(msgDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            const chatBox = document.getElementById('chat-box');
+            let typingDiv = document.getElementById('typing-indicator');
+
+            if (!typingDiv) {
+                typingDiv = document.createElement('div');
+                typingDiv.className = 'message bot typing';
+                typingDiv.id = "typing-indicator";
+                chatBox.appendChild(typingDiv);
+            }
+
+            let dots = 0;
+            const baseText = "Pensando"; 
+            const maxDots = 5; // Máximo de 3 puntos
+
+            // Establece un ancho fijo usando espacios invisibles
+            typingDiv.textContent = baseText + ".";
+            const fixedWidth = typingDiv.offsetWidth; 
+            typingDiv.style.width = `${fixedWidth}px`; // Mantiene un ancho estático
+
+            // Actualiza el indicador cada segundo
+            const interval = setInterval(() => {
+                dots = (dots + 1) % (maxDots + 1);
+                typingDiv.textContent = baseText + ".".repeat(dots) + " ".repeat(maxDots - dots);
+            }, 750);
+
+            return interval;
+        }
+
+        function removeTypingIndicator() {
+            const typingDiv = document.getElementById("typing-indicator");
+            if (typingDiv) typingDiv.remove();
+        }
+
+        async function sendMessage() {
+            if (!sessionId) await startNewSession();
+            if (isResponding) return;
+            isResponding = true;
+            document.getElementById('send-btn').disabled = true;
+            
+            const input = document.getElementById('user-input');
+            const message = input.value.trim();
+            if (!message) return;
+
+            appendMessage(message, 'user');
+            input.value = '';
+
+            showTypingIndicator();
+
+            const res = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, session_id: sessionId })
+            });
+
+            removeTypingIndicator();
+
+            const reader = res.body.getReader();
+            let botMessage = '';
+            appendMessage(botMessage, 'bot');
+            const botMsgDiv = document.querySelector('.bot:last-child');
+            decoder = new TextDecoder()
+            while (true) {
+                const { done, value } = await reader.read();
+                console.log(value);
+                console.log(done);
+                if (done) break;
+                botMessage += decoder.decode(value, { stream: true });
+                botMsgDiv.textContent = botMessage;
+            }
+            isResponding = false;
+            document.getElementById('send-btn').disabled = false;
+        }
+
+        async function startNewSession() {
+            const res = await fetch('/new_session');
+            const data = await res.json();
+            sessionId = data.session_id;
+            localStorage.setItem('sessionId', sessionId);
+            document.getElementById('chat-box').innerHTML = '';
+        }
+
+        document.getElementById('user-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        loadHistory();
+    </script>
+</body>
+</html>
