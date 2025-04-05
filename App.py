@@ -6,8 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
-from ChatIA import rag_chain_stream
-from ChatIA import session_manager
+from ChatIA import session_manager, crawl_and_scrape_chain_stream
 
 
 # --- Configuración de la API con FastAPI ---
@@ -37,7 +36,7 @@ async def new_session():
 async def chat_endpoint(chat_request: ChatRequest):
     # Si no se envía session_id, se genera uno nuevo
     session_id = chat_request.session_id or str(uuid.uuid4())
-    return StreamingResponse(rag_chain_stream(chat_request.message, session_id), media_type="text/event-stream")
+    return StreamingResponse(crawl_and_scrape_chain_stream(chat_request.message, session_id), media_type="text/event-stream")
 
 @app.get("/history", response_model=HistoryResponse)
 async def get_history(session_id: str):
