@@ -4,6 +4,7 @@ __pycache__/
 .env
 .ollama
 .vscode
+.git
 documentos
 static
 chroma_db

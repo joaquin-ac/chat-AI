@@ -1,3 +1,5 @@
 # Variables de entorno
 .env
 *.env
+.ollama
+*.ollama

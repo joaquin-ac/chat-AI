@@ -1,18 +1,27 @@
 import sys
 from langchain_ollama import OllamaLLM
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
 import os
 
 # --- Configuración inicial ---
 sys.stdin.reconfigure(encoding='utf-8')
 sys.stdout.reconfigure(encoding='utf-8')
 
-# Load environment variables
+# Cargar variables de entorno
 load_dotenv()
 
-# Carga del modelo de Ollama
-llm = OllamaLLM(model=os.getenv('OLLAMA_MODEL', 'llama3.2'), temperature=0)
+# --- Modelo para Query Refiner (sin streaming) ---
+#llm_refiner = OllamaLLM(model="llama3.2", temperature=0)
+llm_refiner = ChatOpenAI(
+    openai_api_base="https://api.deepseek.com/v1",
+    openai_api_key=os.getenv("DEEPSEEK_API_KEY"),
+    model_name="deepseek-chat",
+    temperature=0,
+    streaming=False 
+)
 
 # --- Query Refiner (Reformulador de Preguntas) ---
 query_refiner_prompt = ChatPromptTemplate.from_messages(
@@ -74,5 +83,6 @@ query_refiner_prompt = ChatPromptTemplate.from_messages(
         ("user", "Consulta original: {input}\n\nConsulta optimizada: ")
     ]
 )
-# Crear la cadena de refinamiento de consulta
-query_refiner_chain = query_refiner_prompt | llm
+
+# Cadena de refinamiento (sin streaming)
+query_refiner_chain = query_refiner_prompt | llm_refiner | StrOutputParser()

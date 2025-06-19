@@ -4,15 +4,16 @@ from typing import AsyncGenerator
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
 from SessionManager import SessionManager
 from langchain_community.document_transformers import LongContextReorder
-from QueryRefiner import query_refiner_chain, llm
+from QueryRefiner import query_refiner_chain
+from CargaRag import crear_retriever
 from crawler import crawl_web
 from scraper import scrape_web, extract_relevant_text
 from datetime import datetime, timedelta, timezone
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
 from dotenv import load_dotenv
+
 
 # --- Configuración inicial ---
 sys.stdin.reconfigure(encoding='utf-8')
@@ -24,27 +25,17 @@ load_dotenv()
 # Configuración compartida
 PERSIST_DIR = os.getenv('PERSIST_DIR', './chroma_db')
 
-def crear_retriever():
-    embeddings = OllamaEmbeddings(model=os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text'))
-    
-    if not os.path.exists(PERSIST_DIR):
-        raise ValueError("Primero debes ejecutar create_vectors.py para crear la base de datos vectorial")
-    
-    vectorstore = Chroma(
-        persist_directory=PERSIST_DIR,
-        embedding_function=embeddings
-    )
-    
-    return vectorstore.as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={'score_threshold': 0.45}
-    )
-
-
+# Instancia importantes
 retriever = crear_retriever()
-
-# Instancia para el manejo de sesiones
 session_manager = SessionManager()
+# --- Modelo para Cadena Principal (con streaming) ---
+llm_main = ChatOpenAI(
+    openai_api_base="https://api.deepseek.com/v1",
+    openai_api_key=os.getenv("DEEPSEEK_API_KEY"),
+    model_name="deepseek-chat",
+    temperature=0,
+    streaming=True  # ← Habilitado para streaming
+)
 
 # --- Prompt principal para la respuesta del chatbot ---
 prompt_template = ChatPromptTemplate.from_messages(
@@ -59,7 +50,7 @@ prompt_template = ChatPromptTemplate.from_messages(
 
                 ### **Directrices Principales**  
                 1. **Contexto UNNE**: Asume que todas las consultas están relacionadas con la UNNE y su ámbito de influencia.  
-                2. **Veracidad**: Nunca inventes información ni intentes predecirla o dar una idea general basada en otro conocimiento. Si no hay datos disponibles, indica claramente este hecho.  
+                2. **Veracidad**: Nunca inventes información. Si no hay datos disponibles solo indica claramente este hecho sin intentar adivinar el recurso el cual el usuario debe visitar.  
                 3. **Estructura**: Responde de forma clara, organizada y concisa. Vincula lógicamente la respuesta con el historial de conversación. 
 
                 ### **Pasos de Ejecución**  
@@ -71,7 +62,7 @@ prompt_template = ChatPromptTemplate.from_messages(
                 - Usa **exclusivamente** los datos recuperados del contexto. Nunca inventes información ni intentes predecirla o dar una idea general basada en otro conocimiento. Si no existen o no se menciona en el texto nada relevante, informa: *"No estoy interiorizado con esa información"* o *"No tengo suficiente conocimiento sobre [tema específico]. Te sugiero consultar [recurso oficial].*  
                 4. **Construir respuesta**:  
                 - Organiza la información en bloques temáticos con enlaces/correos integrados naturalmente.  
-                - Ejemplo: *"Para inscripciones, completa el formulario en [Portal Académico](https://unne.edu.ar/inscripciones). Consultas: academica@unne.edu.ar".*  
+                - Ejemplo (si dispones de informacion que declara relevante a los recursos 'https://unne.edu.ar/inscripciones' y 'academica@unne.edu.ar'): *"Para inscripciones, completa el formulario en [Portal Académico](https://unne.edu.ar/inscripciones). Consultas: academica@unne.edu.ar".*  
 
                 ---
 
@@ -86,18 +77,17 @@ prompt_template = ChatPromptTemplate.from_messages(
 
                 ### **Ejemplos**  
 
-                **Caso 1 - Información Disponible**  
+                **Caso 1 - Con información disponible que declara relevante a los recursos 'https://becas.unne.edu.ar' y 'becas@unne.edu.ar'**  
                 - *Usuario*: "¿Cómo renovar la beca de investigación?"  
                 - *Respuesta*: "La renovación de becas se gestiona mediante el [Sistema de Gestión de Becas](https://becas.unne.edu.ar). Requisitos: informe de avance y certificado de alumno regular. Plazo: hasta el 30/11. Dudas: becas@unne.edu.ar".  
 
-                **Caso 2 - Información No Disponible**  
+                **Caso 2 - Sin informacion disponible**  
                 - *Usuario*: "¿Cuál es el horario de la biblioteca en Resistencia?"  
-                - *Respuesta*: "No tengo datos actualizados. Te recomiendo consultar el [sitio de Bibliotecas UNNE](https://biblioteca.unne.edu.ar) o contactarlos al bibcentral@unne.edu.ar".  
+                - *Respuesta*: "No tengo datos actualizados. Te recomiendo consultar el sitio oficial de la Biblioteca de la UNNE".  
 
-                **Caso 3 - 
+                **Caso 3 - Sin informacion disponible**
                 - *Usuario*: "¿Cómo renovar la beca de investigación?"  
-                - *Respuesta* (si no hay datos en informacion disponible):  
-                "No estoy interiorizado sobre el proceso de renovación de becas. Para obtener detalles precisos, visita el [Sistema de Gestión de Becas UNNE](https://becas.unne.edu.ar) o escribe a becas@unne.edu.ar".  
+                - *Respuesta*: "No tengo datos actualizados. Para obtener detalles precisos, te recomiendo consultar el sitio oficial del Sistema de Gestión de Becas UNNE".  
                 ---  
 
                 ### **Notas Finales**   
@@ -119,9 +109,8 @@ prompt_template = ChatPromptTemplate.from_messages(
         ("user", "User Query: {input}\n\nResponse: ")
     ]
 )
-parser = StrOutputParser()
 # Conecta el modelo al prompt principal
-principal_chain = prompt_template | llm | parser
+principal_chain = prompt_template | llm_main | StrOutputParser()
 
 # --- Función para combinar documentos recuperados ---
 def combine_docs(docs):
@@ -132,19 +121,21 @@ def combine_docs(docs):
 async def crawl_and_scrape_chain_stream(question: str, session_id: str) -> AsyncGenerator[str, None]:
     # Recupera el historial de conversación de la sesión (suponiendo que session_manager ya está definido)
     chat_history = session_manager.get_history(session_id)
-    refined_question = query_refiner_chain.invoke({
+
+    # Usamos ainvoke() con await
+    refined_question = await query_refiner_chain.ainvoke({
         "input": question,
         "chat_history": chat_history
     })
+
     
     print("Pregunta refinada:", refined_question)
     
     formatted_context = ctx_retriever(refined_question)
 
-    #DESCOMENTAR PARA BUSCAR EN WEB   
-    #if not formatted_context:   
+    if not formatted_context:   
 
-        #formatted_context = await ctx_webSearch(refined_question)
+        formatted_context = await ctx_webSearch(refined_question)
     
     # Obtener fecha actual en formato DD/MM/AAAA
     utc_now = datetime.now(timezone.utc)
@@ -193,24 +184,20 @@ def ctx_retriever(refined_question):
             new_content = [doc.page_content for doc in reordered_docs]
             formatted_context = new_content  # <--- Agrega la lista
 
-        print('\n\nContenido de retriever:', new_content)
     return formatted_context
 
 
 async def ctx_webSearch(refined_question):
     # Realiza crawling asíncrono para obtener las URLs relevantes
     urls = await crawl_web(refined_question)
-    print("URLs recuperadas:", urls)
     
     # Realiza scraping asíncrono para extraer el contenido textual de las URLs encontradas
     scraped_contents = await scrape_web(urls)
-    print("Contenidos extraídos:", scraped_contents)
         
     formatted_context = []
     # Si se obtuvo contenido, se extrae el fragmento más relevante semánticamente respecto a la pregunta refinada.
     if scraped_contents:
-        formatted_context = extract_relevant_text(refined_question, scraped_contents, 2000)
-        
-        print('contenido mas relevante web: ', formatted_context)
+        formatted_context = extract_relevant_text(refined_question, scraped_contents, 3000)
+
         
     return formatted_context

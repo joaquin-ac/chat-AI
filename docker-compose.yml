@@ -13,20 +13,6 @@ services:
       - OLLAMA_ACCELERATE=true
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-  
-  vector_creator:
-    build: .
-    container_name: vector_creator
-    profiles: [create-vectors]
-    depends_on:
-      - ollama
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    volumes:
-      - ./chroma_db:/app/chroma_db
-      - ./documentos:/app/documentos
-    command: python create_vectors.py
-    
   app:
     build: .
     container_name: fastapi_chatbot

@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 sys.stdin.reconfigure(encoding='utf-8')
 sys.stdout.reconfigure(encoding='utf-8')
@@ -53,7 +53,7 @@ def procesar_documentos():
             loader = PyPDFLoader(file_path)
             paginas.extend(loader.load())
         
-        text_splitter = CharacterTextSplitter(chunk_size=3000, chunk_overlap=300)
+        text_splitter = CharacterTextSplitter(chunk_size=5000, chunk_overlap=1000)
         docs = text_splitter.split_documents(paginas)
         
         if os.path.exists(PERSIST_DIR):
@@ -70,6 +70,24 @@ def procesar_documentos():
         print(f'Procesados {len(nuevos_archivos)} nuevos documentos')
     else:
         print('No hay documentos nuevos para procesar')
+
+
+def crear_retriever():
+    embeddings = OllamaEmbeddings(model=os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text'))
+    
+    if not os.path.exists(PERSIST_DIR):
+        raise ValueError("Primero debes ejecutar CargaRag.py para crear la base de datos vectorial")
+    
+    vectorstore = Chroma(
+        persist_directory=PERSIST_DIR,
+        embedding_function=embeddings
+    )
+    
+    return vectorstore.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={'score_threshold': 0.55}
+    )
+
 
 if __name__ == "__main__":
     procesar_documentos()
